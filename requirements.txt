@@ -1,0 +1,8 @@
+# Mastodon Parser - зависимости
+# Установка: pip install -r requirements.txt
+
+# Работа с Mastodon API
+Mastodon.py==1.8.1
+
+# Работа с графовой базой данных Neo4j
+neo4j==5.27.0
