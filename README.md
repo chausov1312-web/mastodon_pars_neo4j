@@ -12,11 +12,13 @@
 - Хештеги
 - Медиафайлы (фото, видео, аудио, файлы)
 - Связи между объектами (репосты, ответы, упоминания)
+- **Подписки и подписчики аккаунтов** (связи FOLLOWS)
 
 ## Структура графа
 
 ```
 (Mastodon_Account)-[:POSTED]->(Mastodon_Post)
+(Mastodon_Account)-[:FOLLOWS]->(Mastodon_Account)
 (Mastodon_Post)-[:MENTIONS]->(Mastodon_Account)
 (Mastodon_Post)-[:TAGS]->(Hashtag)
 (Mastodon_Post)-[:REBLOG_OF]->(Mastodon_Post)
@@ -48,7 +50,7 @@ pip install -r requirements.txt
 3. **Получите токен доступа Mastodon:**
 
    - Зарегистрируйте приложение в настройках вашего инстанса Mastodon
-   - Создайте токен доступа с правами `read:statuses`
+   - Создайте токен доступа с правами `read:statuses`, `read:accounts`
 
 ## Настройка
 
@@ -63,12 +65,19 @@ if __name__ == "__main__":
         # Добавьте другие аккаунты:
         # "@username@instance.com",
     ]
-    
+
     # Параметры загрузки
     MAX_PAGES = 3       # Макс. количество страниц (0 = без ограничений)
     MAX_POSTS = 0       # Макс. количество постов (0 = без ограничений)
     MIN_DATE = None     # Минимальная дата (None = без ограничений)
     PRIOR = 1           # Приоритет аккаунтов (для фильтрации в БД)
+    
+    # Лимиты для подписок/подписчиков
+    MAX_FOLLOWING = 100   # Макс. количество подписок (0 = без ограничений)
+    MAX_FOLLOWERS = 100   # Макс. количество подписчиков (0 = без ограничений)
+    
+    # Режим загрузки подписок/подписчиков
+    FOLLOW_MODE = "sequential"  # "sequential" - последовательный, "async" - асинхронный
 ```
 
 ### Параметры конфигурации
@@ -80,6 +89,21 @@ if __name__ == "__main__":
 | `MAX_POSTS` | Макс. постов на аккаунт (0 = все) | `100` |
 | `MIN_DATE` | Минимальная дата загрузки | `datetime(2024, 1, 1)` |
 | `PRIOR` | Приоритет аккаунтов в БД | `1` |
+| `MAX_FOLLOWING` | Макс. подписок для загрузки (0 = все) | `100` |
+| `MAX_FOLLOWERS` | Макс. подписчиков для загрузки (0 = все) | `100` |
+| `FOLLOW_MODE` | Режим загрузки связей | `"sequential"` или `"async"` |
+| `API_LIMIT_FOLLOWING` | Размер страницы для подписок (макс 80) | `80` |
+| `API_LIMIT_FOLLOWERS` | Размер страницы для подписчиков (макс 80) | `80` |
+| `API_LIMIT_POSTS` | Размер страницы для постов (макс 40) | `40` |
+
+### Режимы загрузки подписок/подписчиков
+
+| Режим | Описание | Скорость | Надёжность |
+|-------|----------|----------|------------|
+| `"sequential"` | Последовательная загрузка (~1 запрос/сек) | Медленнее | Высокая |
+| `"async"` | Параллельная асинхронная загрузка | Быстрее | Средняя |
+
+**Рекомендация:** Используйте `sequential` для больших объёмов данных, чтобы избежать rate limiting.
 
 ## Запуск
 
@@ -133,8 +157,22 @@ python mastodon_pars.py
 ### Получить все посты аккаунта:
 ```cypher
 MATCH (a:Mastodon_Account {username: "nixCraft"})-[:POSTED]->(p:Mastodon_Post)
-RETURN p.created_at, p.content, p.reblogs_count, p.favourites_count
+RETURN p.created_at, p.url, p.reblogs_count, p.favourites_count
 ORDER BY p.created_at DESC
+```
+
+### Найти подписки аккаунта:
+```cypher
+MATCH (a:Mastodon_Account {username: "nixCraft"})-[:FOLLOWS]->(b:Mastodon_Account)
+RETURN b.username, b.display_name, b.followers_count
+ORDER BY b.followers_count DESC
+```
+
+### Найти подписчиков аккаунта:
+```cypher
+MATCH (a:Mastodon_Account {username: "nixCraft"})<-[:FOLLOWS]-(b:Mastodon_Account)
+RETURN b.username, b.display_name, b.followers_count
+ORDER BY b.followers_count DESC
 ```
 
 ### Найти посты с хештегом:
@@ -142,6 +180,16 @@ ORDER BY p.created_at DESC
 MATCH (p:Mastodon_Post)-[:TAGS]->(h:Hashtag {name: "python"})
 RETURN p.created_at, p.url
 ORDER BY p.created_at DESC
+```
+
+### Найти взаимные подписки (друзья):
+```cypher
+MATCH (a:Mastodon_Account {username: "nixCraft"})-[r1:FOLLOWS]->(b:Mastodon_Account)
+WHERE EXISTS {
+    MATCH (b)-[:FOLLOWS]->(a)
+}
+RETURN b.username, b.display_name
+ORDER BY b.username
 ```
 
 ### Получить статистику графа:
@@ -161,11 +209,16 @@ ORDER BY uri_count DESC
 ## Структура проекта
 
 ```
-kb_lab1_2/
-├── mastodon_pars.py      # Основной скрипт парсера
-├── requirements.txt      # Зависимости Python
-├── README.md            # Эта документация
-└── mastodon_pars.log    # Файл логов (создаётся при запуске)
+mastodon_pars/
+├── mastodon_pars.py          # Основной скрипт парсера
+├── mastodon_followings.py    # Парсер подписок (отдельный)
+├── mastodon_followers.py     # Парсер подписчиков (отдельный)
+├── clear_db.py               # Скрипт очистки БД
+├── requirements.txt          # Зависимости Python
+├── README.md                # Эта документация
+├── mastodon_following.json  # Данные подписок (экспорт)
+├── mastodon_followers.json  # Данные подписчиков (экспорт)
+└── mastodon_pars.log        # Файл логов (создаётся при запуске)
 ```
 
 ## Возможные ошибки
@@ -179,8 +232,14 @@ kb_lab1_2/
 - Убедитесь, что инстанс Mastodon доступен
 
 ### `FloodWaitError` (ограничение API)
-- Скрипт автоматически ожидает 10 секунд
-- Уменьшите `MAX_PAGES` для снижения нагрузки
+- Скрипт автоматически ожидает сброса лимита
+- Используйте `FOLLOW_MODE = "sequential"` для снижения нагрузки
+- Уменьшите `MAX_PAGES` или `MAX_FOLLOWING/MAX_FOLLOWERS`
+
+### Rate limiting при загрузке подписок/подписчиков
+- API Mastodon ограничивает ~300 запросов за 15 минут
+- Последовательный режим автоматически делает задержку 1 сек между запросами
+- При получении 429 ошибки скрипт ждёт указанное в заголовке время
 
 ## Лицензия
 
